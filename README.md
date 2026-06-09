@@ -4,7 +4,7 @@ It should also work with other similar RP2040 based boards - make sure you chang
 It is heavily based on the [excellent implementation of fusee-launcher by Qyriad](https://github.com/Qyriad/fusee-launcher),
 as well as on the [implementation of fusee-launcher for samd21 by blockfeed](https://github.com/blockfeed/sam-fusee-launcher-internal/).
 
-At the moment, it requires a patched TinyUSB implementation, because of hathach/tinyusb#1097.
+This project builds with the Pico SDK and TinyUSB host stack. GitHub Actions also builds the UF2 artifact on every push and pull request to `main`.
 
 ## Build
 To build fusee-rp2040, first install the [Pico SDK](https://github.com/raspberrypi/pico-sdk), as outlined in [this Getting Started document](https://datasheets.raspberrypi.com/pico/getting-started-with-pico.pdf).
@@ -19,4 +19,4 @@ cmake ..
 make -j$(nproc)
 ```
 
-After that, copy `build/fusee.uf2` to your board's internal memory, and it should hopefully work.
+After that, copy `build/src/fusee.uf2` to your board's internal memory, and it should hopefully work.

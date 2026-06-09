@@ -21,13 +21,18 @@ jobs:
           sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib build-essential cmake python3
 
       - name: Configure CMake
-        run: cmake -B build -DPICO_SDK_FETCH_FROM_GIT=on
+        run: cmake -B build -DPICO_SDK_FETCH_FROM_GIT=on -DPICO_SDK_FETCH_FROM_GIT_TAG=2.2.0
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build --parallel
 
-      - name: Upload UF2 Artifact
+      - name: Report firmware size
+        run: arm-none-eabi-size build/src/fusee.elf
+
+      - name: Upload Firmware Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fusee-uf2
-          path: build/src/fusee.uf2
+          name: fusee-rp2040
+          path: |
+            build/src/fusee.uf2
+            build/src/fusee.elf.map

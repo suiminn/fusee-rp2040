@@ -201,6 +201,13 @@ static bool rcm_driver_open(uint8_t rhport, uint8_t daddr,
         return false;
     }
 
+    uint16_t vid = 0;
+    uint16_t pid = 0;
+    if (!tuh_vid_pid_get(daddr, &vid, &pid) || vid != USB_VID || pid != USB_PID)
+    {
+        return false;
+    }
+
     uint8_t const *desc = (uint8_t const*) itf_desc;
     uint8_t const *end = desc + max_len;
     bool opened_in = false;
