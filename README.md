@@ -1,6 +1,6 @@
 # fusee-rp2040
-This is an implementation of the fusée gelée exploit that runs on the Adafruit Feather RP2040.
-It should also work with other similar RP2040 based boards - make sure you change LED_PIN in [src/fusee.c](src/fusee.c).  
+This is an implementation of the fusée gelée exploit for RP2040-based boards.
+It should also work with other similar RP2040 based boards. Board-specific values are selected through the Pico SDK `PICO_BOARD` setting instead of source edits.
 It is heavily based on the [excellent implementation of fusee-launcher by Qyriad](https://github.com/Qyriad/fusee-launcher),
 as well as on the [implementation of fusee-launcher for samd21 by blockfeed](https://github.com/blockfeed/sam-fusee-launcher-internal/).
 
@@ -13,10 +13,21 @@ After you are done, make sure you set the `PICO_SDK_PATH` environment variable t
 ```sh
 git clone https://github.com/Kozova1/fusee-rp2040
 cd fusee-rp2040
-mkdir build
-cd build
-cmake ..
-make -j$(nproc)
+cmake -B build
+cmake --build build --parallel
 ```
 
 After that, copy `build/src/fusee.uf2` to your board's internal memory, and it should hopefully work.
+
+The default RP2040 board target is `waveshare_rp2040_one` for the Waveshare RP2040-One. To build for another Pico SDK-supported board, pass its board name during configuration:
+```sh
+cmake -B build -DPICO_BOARD=seeed_xiao_rp2040
+cmake --build build --parallel
+```
+
+If your board definition does not describe the status LED correctly, you can override it without editing source:
+```sh
+cmake -B build -DFUSEE_STATUS_LED_PIN=25
+cmake -B build -DFUSEE_STATUS_LED_PIN=25 -DFUSEE_STATUS_LED_INVERTED=ON
+cmake -B build -DFUSEE_STATUS_LED_ENABLED=OFF
+```

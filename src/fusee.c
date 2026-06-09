@@ -1,14 +1,12 @@
 #include <pico/stdlib.h>
 #include <pico/platform.h>
+#include <pico/status_led.h>
 #include <tusb.h>
-#include <bsp/board.h>
 #include "host/usbh_pvt.h"
 #include <string.h>
 
 #include "bin/hekate_ctcaer_6.5.2.hex"
 #include "bin/intermezzo.hex"
-
-#define LED_PIN 13
 
 #define USB_VID 0x0955
 #define USB_PID 0x7321
@@ -34,6 +32,7 @@ const uint32_t COPY_BUFFER_ADDRESSES[2] = {0x40005000, 0x40009000};
 volatile int error_line = 0;
 
 static int current_buffer = 0;
+static bool status_led_ready = false;
 
 typedef struct {
     volatile bool complete;
@@ -44,6 +43,7 @@ typedef struct {
 static void _panic(int);
 static void assert_true(bool, int);
 static void assert_success(xfer_result_t, int);
+static void set_status_led(bool);
 void tuh_mount_cb(uint8_t);
 static inline uint32_t align_up(uint32_t, uint32_t);
 static inline uint32_t get_current_buffer_address();
@@ -83,8 +83,7 @@ usbh_class_driver_t const *usbh_app_driver_get_cb(uint8_t *driver_count)
 
 int main()
 {
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
+    status_led_ready = status_led_init();
 
     assert_true(tusb_init(), __LINE__);
 
@@ -98,9 +97,9 @@ static void _panic(int line_nubmer)
 {
     error_line = line_nubmer;
     while (1) {
-        gpio_put(LED_PIN, 1);
+        set_status_led(true);
         sleep_ms(300);
-        gpio_put(LED_PIN, 0);
+        set_status_led(false);
         sleep_ms(300);
     }
 }
@@ -112,6 +111,14 @@ static void assert_true(bool expr, int line)
 static void assert_success(xfer_result_t res, int line)
 {
     assert_true(res == XFER_RESULT_SUCCESS, line);
+}
+
+static void set_status_led(bool led_on)
+{
+    if (status_led_ready)
+    {
+        (void) status_led_set_state(led_on);
+    }
 }
 
 static inline void toggle_buffer()
@@ -419,6 +426,6 @@ void tuh_mount_cb(uint8_t daddr)
 
     trigger_controlled_memcpy(daddr);
 
-    gpio_put(LED_PIN, 1);
+    set_status_led(true);
     while(1);
 }
