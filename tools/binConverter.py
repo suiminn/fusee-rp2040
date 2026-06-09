@@ -2,9 +2,9 @@
 """
 This code was shamelessly stolen from https://github.com/blockfeed/sam-fusee-launcher-internal/
 """
-import sys
-import binascii
 import os
+import argparse
+import sys
 
 
 def printProgressBar(progress):
@@ -19,8 +19,9 @@ def openFileToByte_generator(filename , chunkSize = 128):
     with open(filename, "rb") as f:
         while True:
             chunk = f.read(chunkSize)
-            readBytes += chunkSize
-            printProgressBar(readBytes/float(fileSize))
+            readBytes += len(chunk)
+            if fileSize:
+                printProgressBar(readBytes/float(fileSize))
             if chunk:
                 for byte in chunk:
                     yield byte
@@ -28,10 +29,13 @@ def openFileToByte_generator(filename , chunkSize = 128):
                 break
 
 
-if(len(sys.argv) != 2):
-	sys.exit('usage: binConverter.py "pathToFile\\fileName.bin"')
+parser = argparse.ArgumentParser(description="Convert a binary blob into a C include file.")
+parser.add_argument("input", help="binary file to convert")
+parser.add_argument("--symbol", default="payload", help="C array symbol name")
+parser.add_argument("--section", default="payloads", help="RP2040 flash section name")
+args = parser.parse_args()
 
-fileIn = sys.argv[1]
+fileIn = args.input
 
 
 base = os.path.splitext(fileIn)[0]
@@ -49,11 +53,15 @@ for byte in openFileToByte_generator(fileIn,16):
 
 
 
-stringBuffer = "#include <pico/platform.h>\nconst uint8_t __in_flash(\"payloads\") payload = {\n" + stringBuffer + "\n};"
+stringBuffer = (
+    "#include <pico/platform.h>\n"
+    f"const uint8_t __in_flash(\"{args.section}\") {args.symbol}[] = {{\n"
+    + stringBuffer
+    + "\n};"
+)
 
 print("\nwriting file: " + fileOut)
-text_file = open(fileOut, "w")
-text_file.write(stringBuffer)
-text_file.close()
+with open(fileOut, "w") as text_file:
+    text_file.write(stringBuffer)
 
 print("finished")
