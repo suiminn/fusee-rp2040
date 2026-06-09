@@ -31,7 +31,7 @@ endif ()
 set(PICO_SDK_PATH "${PICO_SDK_PATH}" CACHE PATH "Path to the Raspberry Pi Pico SDK")
 set(PICO_SDK_FETCH_FROM_GIT "${PICO_SDK_FETCH_FROM_GIT}" CACHE BOOL "Set to ON to fetch copy of SDK from git if not otherwise locatable")
 set(PICO_SDK_FETCH_FROM_GIT_PATH "${PICO_SDK_FETCH_FROM_GIT_PATH}" CACHE FILEPATH "location to download SDK")
-set(PICO_SDK_FETCH_FROM_GIT_TAG "${PICO_SDK_FETCH_FROM_GIT_TAG}" CACHE FILEPATH "release tag for SDK")
+set(PICO_SDK_FETCH_FROM_GIT_TAG "${PICO_SDK_FETCH_FROM_GIT_TAG}" CACHE STRING "release tag for SDK")
 
 if (NOT PICO_SDK_PATH)
     if (PICO_SDK_FETCH_FROM_GIT)
@@ -45,14 +45,14 @@ if (NOT PICO_SDK_PATH)
             FetchContent_Declare(
                     pico_sdk
                     GIT_REPOSITORY https://github.com/raspberrypi/pico-sdk
-                    GIT_TAG ${PICO_SDK_FETCH_FROM_GIT_TAG}
+                    GIT_TAG "${PICO_SDK_FETCH_FROM_GIT_TAG}"
                     GIT_SUBMODULES_RECURSE FALSE
             )
         else ()
             FetchContent_Declare(
                     pico_sdk
                     GIT_REPOSITORY https://github.com/raspberrypi/pico-sdk
-                    GIT_TAG ${PICO_SDK_FETCH_FROM_GIT_TAG}
+                    GIT_TAG "${PICO_SDK_FETCH_FROM_GIT_TAG}"
             )
         endif ()
 
