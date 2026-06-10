@@ -36,11 +36,12 @@ add_custom_target(generate_rcm_image DEPENDS "${FUSEE_RCM_IMAGE_INCLUDE}")
 add_executable(fusee fusee.c)
 add_dependencies(fusee generate_rcm_image)
 
-set(FUSEE_DEBUG_UART ON CACHE BOOL "Enable UART debug logging")
+set(FUSEE_DEBUG_UART OFF CACHE BOOL "Enable UART debug logging")
 set(FUSEE_STATUS_LED_PIN "" CACHE STRING "Override the board status LED GPIO pin; leave empty to use PICO_BOARD defaults")
 set(FUSEE_STATUS_LED_INVERTED "" CACHE STRING "Override status LED polarity; true for active-low, false for active-high")
 set(FUSEE_STATUS_LED_ENABLED "" CACHE STRING "Override status LED availability; false disables regular and colored status LEDs")
 set(FUSEE_STATUS_LED_HOLD_MS "3000" CACHE STRING "How long final success/error status LED indications stay visible, in milliseconds")
+set(FUSEE_STATUS_LED_RGB_ORDER "" CACHE STRING "Override colored status LED byte order; true for RGB, false for Pico SDK default GRB")
 
 if (FUSEE_DEBUG_UART)
     target_compile_definitions(fusee PRIVATE FUSEE_DEBUG_UART=1)
@@ -55,6 +56,17 @@ pico_enable_stdio_usb(fusee 0)
 target_compile_definitions(fusee PRIVATE
     FUSEE_STATUS_LED_HOLD_MS=${FUSEE_STATUS_LED_HOLD_MS}
 )
+
+if (NOT "${FUSEE_STATUS_LED_RGB_ORDER}" STREQUAL "")
+    if (FUSEE_STATUS_LED_RGB_ORDER)
+        set(FUSEE_STATUS_LED_RGB_ORDER_VALUE 1)
+    else()
+        set(FUSEE_STATUS_LED_RGB_ORDER_VALUE 0)
+    endif()
+    target_compile_definitions(fusee PRIVATE
+        FUSEE_STATUS_LED_RGB_ORDER=${FUSEE_STATUS_LED_RGB_ORDER_VALUE}
+    )
+endif()
 
 if (NOT "${FUSEE_STATUS_LED_PIN}" STREQUAL "")
     target_compile_definitions(fusee PRIVATE

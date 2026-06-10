@@ -46,6 +46,11 @@ To change the hold time:
 cmake -B build -DFUSEE_STATUS_LED_HOLD_MS=5000
 cmake --build build --parallel
 ```
+If a colored LED shows red and green swapped, override the byte order:
+```sh
+cmake -B build -DFUSEE_STATUS_LED_RGB_ORDER=ON
+cmake --build build --parallel
+```
 
 UART debug logging is enabled by default and uses the Pico SDK board's default UART pins at 115200 baud. On Raspberry Pi Pico-style boards this is typically UART0 TX/RX on GPIO0/GPIO1. To build without UART logging:
 ```sh

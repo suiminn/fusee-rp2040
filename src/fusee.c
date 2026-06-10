@@ -38,9 +38,24 @@
 #define FUSEE_STATUS_LED_HOLD_MS 3000u
 #endif
 
-#define STATUS_LED_COLOR_BUSY PICO_COLORED_STATUS_LED_COLOR_FROM_RGB(0x00u, 0x18u, 0x40u)
-#define STATUS_LED_COLOR_SUCCESS PICO_COLORED_STATUS_LED_COLOR_FROM_RGB(0x00u, 0x40u, 0x08u)
-#define STATUS_LED_COLOR_ERROR PICO_COLORED_STATUS_LED_COLOR_FROM_RGB(0x40u, 0x00u, 0x00u)
+#ifndef FUSEE_STATUS_LED_RGB_ORDER
+#ifdef WAVESHARE_RP2040_ONE
+#define FUSEE_STATUS_LED_RGB_ORDER 1
+#else
+#define FUSEE_STATUS_LED_RGB_ORDER 0
+#endif
+#endif
+
+#if FUSEE_STATUS_LED_RGB_ORDER
+#define STATUS_LED_COLOR_FROM_RGB(r, g, b) PICO_COLORED_STATUS_LED_COLOR_FROM_RGB((g), (r), (b))
+#else
+#define STATUS_LED_COLOR_FROM_RGB(r, g, b) PICO_COLORED_STATUS_LED_COLOR_FROM_RGB((r), (g), (b))
+#endif
+
+#define STATUS_LED_COLOR_BUSY STATUS_LED_COLOR_FROM_RGB(0x00u, 0x00u, 0x40u)
+#define STATUS_LED_COLOR_SUCCESS STATUS_LED_COLOR_FROM_RGB(0x00u, 0x40u, 0x00u)
+#define STATUS_LED_COLOR_ERROR STATUS_LED_COLOR_FROM_RGB(0x40u, 0x00u, 0x00u)
+#define STATUS_LED_COLORED_RESET_US 80u
 #define STATUS_LED_SINGLE_BUSY_PERIOD_MS 700u
 #define STATUS_LED_SINGLE_BUSY_ON_MS 120u
 #define STATUS_LED_SINGLE_ERROR_PERIOD_MS 300u
@@ -176,6 +191,9 @@ int main()
     status_led_ready = status_led_init();
     debug_init();
 
+    LOG("status led ready=%u status_supported=%u colored_supported=%u via_colored=%u rgb_order=%u",
+        status_led_ready, status_led_supported(), colored_status_led_supported(),
+        status_led_via_colored_status_led(), FUSEE_STATUS_LED_RGB_ORDER);
     LOG("boot rcm_image=%lu smash_buffer=%lu", (unsigned long) RCM_IMAGE_LEN,
         (unsigned long) sizeof(smash_buffer));
 
@@ -250,6 +268,18 @@ static const char *xfer_result_name(xfer_result_t result)
     }
 }
 
+static const char *status_led_event_name(status_led_event_t event)
+{
+    switch (event)
+    {
+        case STATUS_LED_EVENT_OFF: return "OFF";
+        case STATUS_LED_EVENT_BUSY: return "BUSY";
+        case STATUS_LED_EVENT_SUCCESS: return "SUCCESS";
+        case STATUS_LED_EVENT_ERROR: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
+
 static void debug_init(void)
 {
     stdio_uart_init();
@@ -274,6 +304,7 @@ static void debug_heartbeat(void)
 #define error_name(error) "disabled"
 #define smash_result_name(result) "disabled"
 #define xfer_result_name(result) "disabled"
+#define status_led_event_name(event) "disabled"
 
 static void debug_init(void)
 {
@@ -474,29 +505,57 @@ static bool status_led_single_event_on(status_led_event_t event, uint32_t elapse
 
 static void set_status_led_color(bool led_on, uint32_t color)
 {
+    bool const colored_supported_now = colored_status_led_supported();
+    bool const status_supported_now = status_led_supported();
+    bool const via_colored_now = status_led_via_colored_status_led();
+    bool const colored_was_on = colored_status_led_get_state();
+    bool colored_off_ok = false;
+    bool colored_set_ok = false;
+    bool status_set_ok = false;
+    bool handled = false;
+
     if (status_led_ready)
     {
-        bool handled = false;
-
-        if (colored_status_led_supported())
+        if (colored_supported_now)
         {
             if (led_on)
             {
-                (void) colored_status_led_set_state(false);
-                handled = colored_status_led_set_on_with_color(color);
+                colored_off_ok = !colored_was_on || colored_status_led_set_state(false);
+                if (colored_was_on && colored_off_ok)
+                {
+                    sleep_us(STATUS_LED_COLORED_RESET_US);
+                }
+                colored_set_ok = colored_status_led_set_on_with_color(color);
+                if (colored_set_ok)
+                {
+                    sleep_us(STATUS_LED_COLORED_RESET_US);
+                }
+                handled = colored_set_ok;
             }
             else
             {
-                handled = colored_status_led_set_state(false);
+                colored_off_ok = colored_status_led_set_state(false);
+                if (colored_off_ok)
+                {
+                    sleep_us(STATUS_LED_COLORED_RESET_US);
+                }
+                handled = colored_off_ok;
             }
         }
 
-        if (!handled && status_led_supported())
+        if (!handled && status_supported_now)
         {
-            (void) status_led_set_state(led_on);
+            status_set_ok = status_led_set_state(led_on);
+            handled = status_set_ok;
         }
     }
     status_led_output_on = led_on;
+
+    LOG("led set on=%u color=0x%08lx ready=%u status=%u colored=%u via=%u "
+        "colored_was_on=%u colored_off=%u colored_set=%u status_set=%u handled=%u",
+        led_on, (unsigned long) color, status_led_ready, status_supported_now,
+        colored_supported_now, via_colored_now, colored_was_on, colored_off_ok,
+        colored_set_ok, status_set_ok, handled);
 }
 
 static void set_status_led_single_pattern(status_led_event_t event, uint32_t now_ms)
@@ -525,6 +584,10 @@ static void show_status_led_event(status_led_event_t event, uint32_t hold_ms)
         status_led_clear_due_ms = now_ms + hold_ms;
     }
 
+    LOG("led event=%s hold=%lu now=%lu due=%lu single=%u",
+        status_led_event_name(event), (unsigned long) hold_ms,
+        (unsigned long) now_ms, (unsigned long) status_led_clear_due_ms,
+        status_led_uses_single_color());
     set_status_led_color(event != STATUS_LED_EVENT_OFF, status_led_event_color(event));
 }
 
