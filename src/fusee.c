@@ -34,6 +34,17 @@
 #define SMASH_BUFFER_SIZE (STACK_END - COPY_BUFFER_HIGH_ADDR)
 #define DEBUG_HEARTBEAT_MS 5000u
 #define PORT_ATTACH_RETRY_DELAY_MS 500u
+#ifndef FUSEE_STATUS_LED_HOLD_MS
+#define FUSEE_STATUS_LED_HOLD_MS 3000u
+#endif
+
+#define STATUS_LED_COLOR_BUSY PICO_COLORED_STATUS_LED_COLOR_FROM_RGB(0x00u, 0x18u, 0x40u)
+#define STATUS_LED_COLOR_SUCCESS PICO_COLORED_STATUS_LED_COLOR_FROM_RGB(0x00u, 0x40u, 0x08u)
+#define STATUS_LED_COLOR_ERROR PICO_COLORED_STATUS_LED_COLOR_FROM_RGB(0x40u, 0x00u, 0x00u)
+#define STATUS_LED_SINGLE_BUSY_PERIOD_MS 700u
+#define STATUS_LED_SINGLE_BUSY_ON_MS 120u
+#define STATUS_LED_SINGLE_ERROR_PERIOD_MS 300u
+#define STATUS_LED_SINGLE_ERROR_ON_MS 150u
 
 static uint8_t smash_buffer[SMASH_BUFFER_SIZE] = {0};
 
@@ -87,11 +98,23 @@ typedef enum {
     SMASH_RESULT_SUBMIT_FAILED,
 } smash_result_t;
 
+typedef enum {
+    STATUS_LED_EVENT_OFF = 0,
+    STATUS_LED_EVENT_BUSY,
+    STATUS_LED_EVENT_SUCCESS,
+    STATUS_LED_EVENT_ERROR,
+} status_led_event_t;
+
 volatile launch_error_t last_error = LAUNCH_ERROR_NONE;
 volatile fusee_state_t fusee_state = FUSEE_STATE_IDLE;
+static status_led_event_t status_led_event = STATUS_LED_EVENT_OFF;
+static uint32_t status_led_event_started_ms = 0;
+static uint32_t status_led_clear_due_ms = 0;
+static bool status_led_output_on = false;
 
 static void debug_init(void);
 static void debug_heartbeat(void);
+static void service_status_led(void);
 static void request_host_reset(char const*);
 static void service_host_reset(void);
 static void service_connected_port(void);
@@ -99,7 +122,15 @@ static void reset_port_attach_tracker(void);
 static bool any_device_mounted(void);
 static void _panic(int);
 static void assert_true(bool, int);
-static void set_status_led(bool);
+static bool status_led_uses_single_color(void);
+static bool status_led_single_event_on(status_led_event_t, uint32_t);
+static void set_status_led_color(bool, uint32_t);
+static void set_status_led_single_pattern(status_led_event_t, uint32_t);
+static void show_status_led_event(status_led_event_t, uint32_t);
+static void show_status_led_busy(void);
+static void show_status_led_success(void);
+static void show_status_led_error(void);
+static void clear_status_led_event(void);
 void tuh_mount_cb(uint8_t);
 static inline uint32_t get_current_buffer_address();
 static inline void toggle_buffer();
@@ -157,6 +188,7 @@ int main()
         tuh_task();
         service_host_reset();
         service_connected_port();
+        service_status_led();
         debug_heartbeat();
     }
 }
@@ -393,9 +425,9 @@ static void _panic(int line_nubmer)
     error_line = line_nubmer;
     LOG("panic line=%d", line_nubmer);
     while (1) {
-        set_status_led(true);
+        set_status_led_color(true, STATUS_LED_COLOR_ERROR);
         sleep_ms(300);
-        set_status_led(false);
+        set_status_led_color(false, 0);
         sleep_ms(300);
     }
 }
@@ -405,11 +437,135 @@ static void assert_true(bool expr, int line)
         _panic(line);
 }
 
-static void set_status_led(bool led_on)
+static uint32_t status_led_event_color(status_led_event_t event)
+{
+    switch (event)
+    {
+        case STATUS_LED_EVENT_BUSY: return STATUS_LED_COLOR_BUSY;
+        case STATUS_LED_EVENT_SUCCESS: return STATUS_LED_COLOR_SUCCESS;
+        case STATUS_LED_EVENT_ERROR: return STATUS_LED_COLOR_ERROR;
+        case STATUS_LED_EVENT_OFF:
+        default: return 0;
+    }
+}
+
+static bool status_led_uses_single_color(void)
+{
+    return status_led_supported() && !colored_status_led_supported();
+}
+
+static bool status_led_single_event_on(status_led_event_t event, uint32_t elapsed_ms)
+{
+    switch (event)
+    {
+        case STATUS_LED_EVENT_BUSY:
+            return (elapsed_ms % STATUS_LED_SINGLE_BUSY_PERIOD_MS) <
+                STATUS_LED_SINGLE_BUSY_ON_MS;
+        case STATUS_LED_EVENT_SUCCESS:
+            return true;
+        case STATUS_LED_EVENT_ERROR:
+            return (elapsed_ms % STATUS_LED_SINGLE_ERROR_PERIOD_MS) <
+                STATUS_LED_SINGLE_ERROR_ON_MS;
+        case STATUS_LED_EVENT_OFF:
+        default:
+            return false;
+    }
+}
+
+static void set_status_led_color(bool led_on, uint32_t color)
 {
     if (status_led_ready)
     {
-        (void) status_led_set_state(led_on);
+        bool handled = false;
+
+        if (colored_status_led_supported())
+        {
+            if (led_on)
+            {
+                (void) colored_status_led_set_state(false);
+                handled = colored_status_led_set_on_with_color(color);
+            }
+            else
+            {
+                handled = colored_status_led_set_state(false);
+            }
+        }
+
+        if (!handled && status_led_supported())
+        {
+            (void) status_led_set_state(led_on);
+        }
+    }
+    status_led_output_on = led_on;
+}
+
+static void set_status_led_single_pattern(status_led_event_t event, uint32_t now_ms)
+{
+    bool const led_on = status_led_single_event_on(event,
+        now_ms - status_led_event_started_ms);
+
+    if (led_on != status_led_output_on)
+    {
+        set_status_led_color(led_on, status_led_event_color(event));
+    }
+}
+
+static void show_status_led_event(status_led_event_t event, uint32_t hold_ms)
+{
+    uint32_t const now_ms = to_ms_since_boot(get_absolute_time());
+
+    status_led_event = event;
+    status_led_event_started_ms = now_ms;
+    if (event == STATUS_LED_EVENT_OFF || hold_ms == 0)
+    {
+        status_led_clear_due_ms = 0;
+    }
+    else
+    {
+        status_led_clear_due_ms = now_ms + hold_ms;
+    }
+
+    set_status_led_color(event != STATUS_LED_EVENT_OFF, status_led_event_color(event));
+}
+
+static void show_status_led_busy(void)
+{
+    show_status_led_event(STATUS_LED_EVENT_BUSY, 0);
+}
+
+static void show_status_led_success(void)
+{
+    show_status_led_event(STATUS_LED_EVENT_SUCCESS, FUSEE_STATUS_LED_HOLD_MS);
+}
+
+static void show_status_led_error(void)
+{
+    show_status_led_event(STATUS_LED_EVENT_ERROR, FUSEE_STATUS_LED_HOLD_MS);
+}
+
+static void clear_status_led_event(void)
+{
+    show_status_led_event(STATUS_LED_EVENT_OFF, 0);
+}
+
+static void service_status_led(void)
+{
+    if (status_led_event == STATUS_LED_EVENT_OFF)
+    {
+        return;
+    }
+
+    uint32_t const now_ms = to_ms_since_boot(get_absolute_time());
+    if (status_led_clear_due_ms != 0 &&
+        (int32_t)(now_ms - status_led_clear_due_ms) >= 0)
+    {
+        clear_status_led_event();
+        return;
+    }
+
+    if (status_led_uses_single_color())
+    {
+        set_status_led_single_pattern(status_led_event, now_ms);
     }
 }
 
@@ -430,7 +586,10 @@ static void reset_launch_state(void)
     active_daddr = 0;
     last_error = LAUNCH_ERROR_NONE;
     fusee_state = FUSEE_STATE_IDLE;
-    set_status_led(false);
+    if (status_led_event == STATUS_LED_EVENT_BUSY)
+    {
+        clear_status_led_event();
+    }
 }
 
 static void sync_xfer_cb(tuh_xfer_t *xfer)
@@ -448,6 +607,7 @@ static bool wait_for_xfer(sync_xfer_t *sync, uint32_t timeout_ms)
     while (!sync->complete)
     {
         tuh_task();
+        service_status_led();
         if (time_reached(deadline))
         {
             return false;
@@ -740,6 +900,7 @@ static void fail_launch(launch_error_t error)
 {
     LOG("launch failed error=%s active=%u state=%s", error_name(error),
         active_daddr, state_name(fusee_state));
+    show_status_led_error();
     if (active_daddr == 0)
     {
         reset_launch_state();
@@ -748,7 +909,6 @@ static void fail_launch(launch_error_t error)
 
     last_error = error;
     fusee_state = FUSEE_STATE_ERROR;
-    set_status_led(false);
 }
 
 static void launch_payload(uint8_t daddr)
@@ -759,7 +919,7 @@ static void launch_payload(uint8_t daddr)
     current_buffer = 0;
     active_daddr = daddr;
     last_error = LAUNCH_ERROR_NONE;
-    set_status_led(false);
+    show_status_led_busy();
 
     if ((RCM_IMAGE_LEN % USB_PACKET_SIZE) != 0 || RCM_IMAGE_LEN > RCM_IMAGE_MAX_LENGTH)
     {
@@ -810,7 +970,7 @@ static void launch_payload(uint8_t daddr)
 
     fusee_state = FUSEE_STATE_DONE;
     LOG("state=%s launch complete", state_name(fusee_state));
-    set_status_led(true);
+    show_status_led_success();
 }
 
 static void log_device_id(uint8_t const *device_id)

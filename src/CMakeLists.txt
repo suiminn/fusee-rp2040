@@ -40,6 +40,7 @@ set(FUSEE_DEBUG_UART ON CACHE BOOL "Enable UART debug logging")
 set(FUSEE_STATUS_LED_PIN "" CACHE STRING "Override the board status LED GPIO pin; leave empty to use PICO_BOARD defaults")
 set(FUSEE_STATUS_LED_INVERTED "" CACHE STRING "Override status LED polarity; true for active-low, false for active-high")
 set(FUSEE_STATUS_LED_ENABLED "" CACHE STRING "Override status LED availability; false disables regular and colored status LEDs")
+set(FUSEE_STATUS_LED_HOLD_MS "3000" CACHE STRING "How long final success/error status LED indications stay visible, in milliseconds")
 
 if (FUSEE_DEBUG_UART)
     target_compile_definitions(fusee PRIVATE FUSEE_DEBUG_UART=1)
@@ -50,6 +51,10 @@ else()
 endif()
 
 pico_enable_stdio_usb(fusee 0)
+
+target_compile_definitions(fusee PRIVATE
+    FUSEE_STATUS_LED_HOLD_MS=${FUSEE_STATUS_LED_HOLD_MS}
+)
 
 if (NOT "${FUSEE_STATUS_LED_PIN}" STREQUAL "")
     target_compile_definitions(fusee PRIVATE

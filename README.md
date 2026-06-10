@@ -38,6 +38,15 @@ cmake -B build -DFUSEE_STATUS_LED_PIN=25 -DFUSEE_STATUS_LED_INVERTED=ON
 cmake -B build -DFUSEE_STATUS_LED_ENABLED=OFF
 ```
 
+On boards with a colored status LED, launch progress is shown in blue, success in green, and failure in red.
+On boards with only a single-color status LED, launch progress is shown with a slow blink, success with a solid light, and failure with a fast blink.
+Success and failure indications are held for 3000 ms by default so they remain visible after USB host reset recovery.
+To change the hold time:
+```sh
+cmake -B build -DFUSEE_STATUS_LED_HOLD_MS=5000
+cmake --build build --parallel
+```
+
 UART debug logging is enabled by default and uses the Pico SDK board's default UART pins at 115200 baud. On Raspberry Pi Pico-style boards this is typically UART0 TX/RX on GPIO0/GPIO1. To build without UART logging:
 ```sh
 cmake -B build -DFUSEE_DEBUG_UART=OFF
