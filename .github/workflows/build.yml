@@ -20,6 +20,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib build-essential cmake python3
 
+      - name: Run RCM Image Generator Tests
+        run: python3 -m unittest tests/test_build_rcm_image.py
+
       - name: Configure CMake
         run: cmake -B build -DPICO_SDK_FETCH_FROM_GIT=on -DPICO_SDK_FETCH_FROM_GIT_TAG=2.2.0
 

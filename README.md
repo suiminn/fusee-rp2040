@@ -19,6 +19,12 @@ cmake --build build --parallel
 
 After that, copy `build/src/fusee.uf2` to your board's internal memory, and it should hopefully work.
 
+The payload and intermezzo binaries are assembled into a complete RCM image at build time. To use different binaries without editing source, pass their paths during configuration:
+```sh
+cmake -B build -DFUSEE_PAYLOAD_BIN=/path/to/payload.bin -DFUSEE_INTERMEZZO_BIN=/path/to/intermezzo.bin
+cmake --build build --parallel
+```
+
 The default RP2040 board target is `waveshare_rp2040_one` for the Waveshare RP2040-One. To build for another Pico SDK-supported board, pass its board name during configuration:
 ```sh
 cmake -B build -DPICO_BOARD=seeed_xiao_rp2040

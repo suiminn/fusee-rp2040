@@ -1,4 +1,40 @@
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(FUSEE_PAYLOAD_BIN "${CMAKE_CURRENT_LIST_DIR}/bin/hekate_ctcaer_6.5.2.bin" CACHE FILEPATH "Payload binary to embed in the generated RCM image")
+set(FUSEE_INTERMEZZO_BIN "${CMAKE_CURRENT_LIST_DIR}/bin/intermezzo.bin" CACHE FILEPATH "Intermezzo relocator binary to embed in the generated RCM image")
+
+get_filename_component(FUSEE_PAYLOAD_BIN_ABS "${FUSEE_PAYLOAD_BIN}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+get_filename_component(FUSEE_INTERMEZZO_BIN_ABS "${FUSEE_INTERMEZZO_BIN}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+
+if (NOT EXISTS "${FUSEE_PAYLOAD_BIN_ABS}")
+    message(FATAL_ERROR "FUSEE_PAYLOAD_BIN does not exist: ${FUSEE_PAYLOAD_BIN_ABS}")
+endif()
+
+if (NOT EXISTS "${FUSEE_INTERMEZZO_BIN_ABS}")
+    message(FATAL_ERROR "FUSEE_INTERMEZZO_BIN does not exist: ${FUSEE_INTERMEZZO_BIN_ABS}")
+endif()
+
+set(FUSEE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(FUSEE_RCM_IMAGE_INCLUDE "${FUSEE_GENERATED_DIR}/rcm_image.h")
+
+add_custom_command(
+    OUTPUT "${FUSEE_RCM_IMAGE_INCLUDE}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/build_rcm_image.py"
+            --payload "${FUSEE_PAYLOAD_BIN_ABS}"
+            --intermezzo "${FUSEE_INTERMEZZO_BIN_ABS}"
+            --output "${FUSEE_RCM_IMAGE_INCLUDE}"
+    DEPENDS
+        "${CMAKE_SOURCE_DIR}/tools/build_rcm_image.py"
+        "${FUSEE_PAYLOAD_BIN_ABS}"
+        "${FUSEE_INTERMEZZO_BIN_ABS}"
+    VERBATIM
+)
+
+add_custom_target(generate_rcm_image DEPENDS "${FUSEE_RCM_IMAGE_INCLUDE}")
+
 add_executable(fusee fusee.c)
+add_dependencies(fusee generate_rcm_image)
 
 set(FUSEE_STATUS_LED_PIN "" CACHE STRING "Override the board status LED GPIO pin; leave empty to use PICO_BOARD defaults")
 set(FUSEE_STATUS_LED_INVERTED "" CACHE STRING "Override status LED polarity; true for active-low, false for active-high")
@@ -36,6 +72,6 @@ endif()
 
 target_link_libraries(fusee pico_stdlib pico_status_led tinyusb_host tinyusb_board)
 
-target_include_directories(fusee PRIVATE .)
+target_include_directories(fusee PRIVATE . "${FUSEE_GENERATED_DIR}")
 
 pico_add_extra_outputs(fusee)
