@@ -37,3 +37,9 @@ cmake -B build -DFUSEE_STATUS_LED_PIN=25
 cmake -B build -DFUSEE_STATUS_LED_PIN=25 -DFUSEE_STATUS_LED_INVERTED=ON
 cmake -B build -DFUSEE_STATUS_LED_ENABLED=OFF
 ```
+
+UART debug logging is enabled by default and uses the Pico SDK board's default UART pins at 115200 baud. On Raspberry Pi Pico-style boards this is typically UART0 TX/RX on GPIO0/GPIO1. To build without UART logging:
+```sh
+cmake -B build -DFUSEE_DEBUG_UART=OFF
+cmake --build build --parallel
+```

@@ -36,9 +36,20 @@ add_custom_target(generate_rcm_image DEPENDS "${FUSEE_RCM_IMAGE_INCLUDE}")
 add_executable(fusee fusee.c)
 add_dependencies(fusee generate_rcm_image)
 
+set(FUSEE_DEBUG_UART ON CACHE BOOL "Enable UART debug logging")
 set(FUSEE_STATUS_LED_PIN "" CACHE STRING "Override the board status LED GPIO pin; leave empty to use PICO_BOARD defaults")
 set(FUSEE_STATUS_LED_INVERTED "" CACHE STRING "Override status LED polarity; true for active-low, false for active-high")
 set(FUSEE_STATUS_LED_ENABLED "" CACHE STRING "Override status LED availability; false disables regular and colored status LEDs")
+
+if (FUSEE_DEBUG_UART)
+    target_compile_definitions(fusee PRIVATE FUSEE_DEBUG_UART=1)
+    pico_enable_stdio_uart(fusee 1)
+else()
+    target_compile_definitions(fusee PRIVATE FUSEE_DEBUG_UART=0)
+    pico_enable_stdio_uart(fusee 0)
+endif()
+
+pico_enable_stdio_usb(fusee 0)
 
 if (NOT "${FUSEE_STATUS_LED_PIN}" STREQUAL "")
     target_compile_definitions(fusee PRIVATE
