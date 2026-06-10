@@ -61,7 +61,7 @@
 #define STATUS_LED_SINGLE_ERROR_PERIOD_MS 300u
 #define STATUS_LED_SINGLE_ERROR_ON_MS 150u
 
-static uint8_t smash_buffer[SMASH_BUFFER_SIZE] = {0};
+CFG_TUSB_MEM_ALIGN static uint8_t smash_buffer[SMASH_BUFFER_SIZE] = {0};
 
 const uint32_t COPY_BUFFER_ADDRESSES[2] = {COPY_BUFFER_LOW_ADDR, COPY_BUFFER_HIGH_ADDR};
 
@@ -357,6 +357,8 @@ static void service_host_reset(void)
     {
         forced_attach_pending = true;
         forced_attach_due_ms = to_ms_since_boot(get_absolute_time()) + PORT_ATTACH_RETRY_DELAY_MS;
+        port_attach_retry_armed = true;
+        port_attach_retry_due_ms = forced_attach_due_ms + PORT_ATTACH_RETRY_DELAY_MS;
         LOG("forced attach armed after host reset");
     }
 
@@ -451,10 +453,10 @@ static bool any_device_mounted(void)
     return false;
 }
 
-static void _panic(int line_nubmer)
+static void _panic(int line_number)
 {
-    error_line = line_nubmer;
-    LOG("panic line=%d", line_nubmer);
+    error_line = line_number;
+    LOG("panic line=%d", line_number);
     while (1) {
         set_status_led_color(true, STATUS_LED_COLOR_ERROR);
         sleep_ms(300);
@@ -903,21 +905,40 @@ static bool endpoint_read(uint8_t daddr, uint8_t *buffer, uint32_t length)
     return true;
 }
 
+static uint32_t usb_packet_aligned_length(uint32_t length)
+{
+    return (length + USB_PACKET_SIZE - 1u) & ~(USB_PACKET_SIZE - 1u);
+}
+
 static bool payload_write(uint8_t daddr, uint8_t const *startp, uint8_t const *endp)
 {
     uint32_t length = endp - startp;
-    uint32_t total = length;
+    uint32_t total = usb_packet_aligned_length(length);
     uint32_t written = 0;
+    CFG_TUSB_MEM_ALIGN static uint8_t padded_packet[USB_PACKET_SIZE];
 
     while (length) {
-        uint32_t bytes_to_transmit = length < USB_PACKET_SIZE ? length : USB_PACKET_SIZE;
-        length -= bytes_to_transmit;
+        uint32_t source_len = length < USB_PACKET_SIZE ? length : USB_PACKET_SIZE;
+        uint32_t bytes_to_transmit = USB_PACKET_SIZE;
+        uint8_t *buffer = (uint8_t*) startp;
+
+        if (source_len < USB_PACKET_SIZE)
+        {
+            memcpy(padded_packet, startp, source_len);
+            memset(padded_packet + source_len, 0, USB_PACKET_SIZE - source_len);
+            buffer = padded_packet;
+            LOG("padding final packet payload=%lu zeroes=%lu",
+                (unsigned long) source_len,
+                (unsigned long) (USB_PACKET_SIZE - source_len));
+        }
+
+        length -= source_len;
 
         toggle_buffer();
 
         uint32_t actual_len = 0;
         xfer_result_t result = XFER_RESULT_INVALID;
-        if (!endpoint_xfer(daddr, USB_EP_OUT, (uint8_t*) startp,
+        if (!endpoint_xfer(daddr, USB_EP_OUT, buffer,
                            bytes_to_transmit, &actual_len,
                            USB_XFER_TIMEOUT_MS, &result))
         {
@@ -931,7 +952,7 @@ static bool payload_write(uint8_t daddr, uint8_t const *startp, uint8_t const *e
                 (unsigned long) total);
             return false;
         }
-        startp += bytes_to_transmit;
+        startp += source_len;
         written += bytes_to_transmit;
 
         if ((written % (USB_PACKET_SIZE * 8u)) == 0 || written == total)
@@ -976,15 +997,17 @@ static void fail_launch(launch_error_t error)
 
 static void launch_payload(uint8_t daddr)
 {
-    LOG("launch start daddr=%u image=%lu max=%lu", daddr,
-        (unsigned long) RCM_IMAGE_LEN, (unsigned long) RCM_IMAGE_MAX_LENGTH);
+    uint32_t image_write_len = usb_packet_aligned_length(RCM_IMAGE_LEN);
+    LOG("launch start daddr=%u image=%lu write=%lu max=%lu", daddr,
+        (unsigned long) RCM_IMAGE_LEN, (unsigned long) image_write_len,
+        (unsigned long) RCM_IMAGE_MAX_LENGTH);
 
     current_buffer = 0;
     active_daddr = daddr;
     last_error = LAUNCH_ERROR_NONE;
     show_status_led_busy();
 
-    if ((RCM_IMAGE_LEN % USB_PACKET_SIZE) != 0 || RCM_IMAGE_LEN > RCM_IMAGE_MAX_LENGTH)
+    if (image_write_len > RCM_IMAGE_MAX_LENGTH)
     {
         fail_launch(LAUNCH_ERROR_IMAGE_LAYOUT);
         return;
@@ -992,7 +1015,7 @@ static void launch_payload(uint8_t daddr)
 
     fusee_state = FUSEE_STATE_READING_ID;
     LOG("state=%s", state_name(fusee_state));
-    uint8_t device_id[16];
+    CFG_TUSB_MEM_ALIGN uint8_t device_id[16];
     if (!endpoint_read(daddr, device_id, sizeof(device_id)))
     {
         fail_launch(LAUNCH_ERROR_DEVICE_ID);
