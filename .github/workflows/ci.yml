@@ -27,7 +27,7 @@ jobs:
         run: python3 -m unittest discover -s tests
 
       - name: Configure CMake
-        run: cmake -B build -DPICO_SDK_FETCH_FROM_GIT=on -DPICO_SDK_FETCH_FROM_GIT_TAG=2.2.0
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DPICO_SDK_FETCH_FROM_GIT=on -DPICO_SDK_FETCH_FROM_GIT_TAG=2.2.0
 
       - name: Build
         env:

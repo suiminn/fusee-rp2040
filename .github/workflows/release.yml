@@ -123,6 +123,7 @@ jobs:
           HEKATE_PAYLOAD_BIN: ${{ steps.payload.outputs.path }}
         run: |
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_FETCH_FROM_GIT=on \
             -DPICO_SDK_FETCH_FROM_GIT_TAG="$PICO_SDK_TAG" \
             -DFUSEE_PAYLOAD_BIN="$HEKATE_PAYLOAD_BIN"

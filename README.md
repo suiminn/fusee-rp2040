@@ -33,16 +33,19 @@ If the Pico SDK is installed locally, set `PICO_SDK_PATH` and build:
 ```sh
 git clone https://github.com/suiminn/fusee-rp2040
 cd fusee-rp2040
-cmake -B build
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
 You can also let CMake fetch the Pico SDK:
 
 ```sh
-cmake -B build -DPICO_SDK_FETCH_FROM_GIT=on -DPICO_SDK_FETCH_FROM_GIT_TAG=2.2.0
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DPICO_SDK_FETCH_FROM_GIT=on -DPICO_SDK_FETCH_FROM_GIT_TAG=2.2.0
 cmake --build build --parallel
 ```
+
+The USB host stack is timing-sensitive, so production builds should use an
+optimized CMake build type such as `Release`.
 
 The firmware is written to:
 
@@ -59,7 +62,7 @@ GitHub unless you provide `FUSEE_PAYLOAD_BIN`.
 Pin a specific hekate release:
 
 ```sh
-cmake -B build -DFUSEE_HEKATE_TAG=v6.5.2
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_HEKATE_TAG=v6.5.2
 cmake --build build --parallel
 ```
 
@@ -68,14 +71,14 @@ Pinning a tag is recommended for repeatable builds.
 Use a local payload binary instead of downloading hekate:
 
 ```sh
-cmake -B build -DFUSEE_PAYLOAD_BIN=/path/to/payload.bin
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_PAYLOAD_BIN=/path/to/payload.bin
 cmake --build build --parallel
 ```
 
 The bundled intermezzo binary is used by default. To provide a different one:
 
 ```sh
-cmake -B build -DFUSEE_INTERMEZZO_BIN=/path/to/intermezzo.bin
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_INTERMEZZO_BIN=/path/to/intermezzo.bin
 cmake --build build --parallel
 ```
 
@@ -86,7 +89,7 @@ SDK-supported board, pass its board name during configuration. Use a fresh build
 directory when switching board targets.
 
 ```sh
-cmake -B build-seeed -DPICO_BOARD=seeed_xiao_rp2040
+cmake -B build-seeed -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=seeed_xiao_rp2040
 cmake --build build-seeed --parallel
 ```
 
@@ -94,9 +97,9 @@ If the board definition does not describe the status LED correctly, override it
 without editing source:
 
 ```sh
-cmake -B build -DFUSEE_STATUS_LED_PIN=25
-cmake -B build -DFUSEE_STATUS_LED_PIN=25 -DFUSEE_STATUS_LED_INVERTED=ON
-cmake -B build -DFUSEE_STATUS_LED_ENABLED=OFF
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_STATUS_LED_PIN=25
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_STATUS_LED_PIN=25 -DFUSEE_STATUS_LED_INVERTED=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_STATUS_LED_ENABLED=OFF
 ```
 
 ## Status LED
@@ -111,14 +114,14 @@ Success and failure indications are held for 3000 ms by default so they remain
 visible after USB host reset recovery. To change the hold time:
 
 ```sh
-cmake -B build -DFUSEE_STATUS_LED_HOLD_MS=5000
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_STATUS_LED_HOLD_MS=5000
 cmake --build build --parallel
 ```
 
 If a colored LED shows red and green swapped, override the byte order:
 
 ```sh
-cmake -B build -DFUSEE_STATUS_LED_RGB_ORDER=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_STATUS_LED_RGB_ORDER=ON
 cmake --build build --parallel
 ```
 
@@ -127,7 +130,7 @@ cmake --build build --parallel
 UART debug logging is disabled by default. To enable it:
 
 ```sh
-cmake -B build -DFUSEE_DEBUG_UART=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEE_DEBUG_UART=ON
 cmake --build build --parallel
 ```
 
