@@ -6,6 +6,22 @@ as well as on the [implementation of fusee-launcher for samd21 by blockfeed](htt
 
 This project builds with the Pico SDK and TinyUSB host stack. GitHub Actions also builds the UF2 artifact on every push and pull request to `main`.
 
+## Automated hekate releases
+Two GitHub Actions workflows keep releases aligned with [CTCaer/hekate releases](https://github.com/CTCaer/hekate/releases).
+
+`Detect hekate release` checks the latest upstream hekate release every six hours. If this repository does not already have a matching `hekate-vX.Y.Z` release, it dispatches `Release hekate payload`.
+
+`Release hekate payload` downloads the matching `hekate_ctcaer_<version>.bin` payload, verifies the release asset digest when GitHub provides one, builds `fusee.uf2` with that payload, and creates a release in this repository tagged `hekate-vX.Y.Z`.
+
+GitHub Actions cannot directly subscribe to another public repository's release event unless that repository or a relay sends this repository an event. For webhook-style triggering, send a `repository_dispatch` event with type `hekate-release` and an optional `tag` payload to run the release workflow directly:
+```sh
+gh api repos/OWNER/fusee-rp2040/dispatches \
+  --method POST \
+  -f event_type=hekate-release \
+  -F client_payload[tag]=v6.5.2
+```
+The release workflow can also be run manually; leave the `hekate_tag` input empty to build the current upstream latest release.
+
 ## Build
 To build fusee-rp2040, first install the [Pico SDK](https://github.com/raspberrypi/pico-sdk), as outlined in [this Getting Started document](https://datasheets.raspberrypi.com/pico/getting-started-with-pico.pdf).
 
@@ -19,7 +35,13 @@ cmake --build build --parallel
 
 After that, copy `build/src/fusee.uf2` to your board's internal memory, and it should hopefully work.
 
-The payload and intermezzo binaries are assembled into a complete RCM image at build time. To use different binaries without editing source, pass their paths during configuration:
+The payload and intermezzo binaries are assembled into a complete RCM image at build time. By default, the first build downloads the latest standard `hekate_ctcaer_<version>.bin` payload from the upstream hekate release into the build directory and reuses it on later builds. To pin a hekate release:
+```sh
+cmake -B build -DFUSEE_HEKATE_TAG=v6.5.2
+cmake --build build --parallel
+```
+
+To use local binaries instead of downloading hekate, pass their paths during configuration:
 ```sh
 cmake -B build -DFUSEE_PAYLOAD_BIN=/path/to/payload.bin -DFUSEE_INTERMEZZO_BIN=/path/to/intermezzo.bin
 cmake --build build --parallel

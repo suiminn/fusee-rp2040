@@ -1,0 +1,202 @@
+name: Release hekate payload
+
+on:
+  workflow_dispatch:
+    inputs:
+      hekate_tag:
+        description: hekate tag to build; leave empty for the latest release
+        required: false
+        type: string
+  repository_dispatch:
+    types: [hekate-release]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-hekate-${{ inputs.hekate_tag || github.event.client_payload.tag || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      PICO_SDK_TAG: 2.2.0
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve hekate release
+        id: hekate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_HEKATE_TAG: ${{ inputs.hekate_tag }}
+          DISPATCH_HEKATE_TAG: ${{ github.event.client_payload.tag }}
+        run: |
+          set -euo pipefail
+
+          requested_tag="${INPUT_HEKATE_TAG:-${DISPATCH_HEKATE_TAG:-}}"
+          if [ -n "$requested_tag" ]; then
+            endpoint="repos/CTCaer/hekate/releases/tags/$requested_tag"
+          else
+            endpoint="repos/CTCaer/hekate/releases/latest"
+          fi
+
+          tag="$(gh api "$endpoint" --jq '.tag_name')"
+          latest_tag="$(gh api repos/CTCaer/hekate/releases/latest --jq '.tag_name')"
+          name="$(gh api "$endpoint" --jq '.name')"
+          html_url="$(gh api "$endpoint" --jq '.html_url')"
+          version="${tag#v}"
+          asset_name="hekate_ctcaer_${version}.bin"
+          asset_digest="$(gh api "$endpoint" --jq ".assets[] | select(.name == \"$asset_name\") | .digest")"
+
+          if [ "$asset_digest" = "null" ]; then
+            asset_digest=""
+          fi
+
+          if ! gh api "$endpoint" --jq ".assets[] | select(.name == \"$asset_name\") | .name" | grep -Fxq "$asset_name"; then
+            echo "::error::No standard hekate payload asset named $asset_name found in $html_url"
+            gh api "$endpoint" --jq '.assets[].name'
+            exit 1
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "name=$name"
+            echo "html_url=$html_url"
+            echo "asset_name=$asset_name"
+            echo "asset_digest=$asset_digest"
+            echo "release_tag=hekate-$tag"
+            if [ "$tag" = "$latest_tag" ]; then
+              echo "is_latest=true"
+            else
+              echo "is_latest=false"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.hekate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $RELEASE_TAG already exists; skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install ARM toolchain and build dependencies
+        if: steps.release.outputs.exists != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib build-essential cmake python3
+
+      - name: Download hekate payload
+        id: payload
+        if: steps.release.outputs.exists != 'true'
+        env:
+          ASSET_NAME: ${{ steps.hekate.outputs.asset_name }}
+          GH_TOKEN: ${{ github.token }}
+          HEKATE_TAG: ${{ steps.hekate.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p payloads
+          payload_path="$PWD/payloads/$ASSET_NAME"
+          python3 tools/download_hekate_payload.py --output "$payload_path" --tag "$HEKATE_TAG"
+
+          echo "path=$payload_path" >> "$GITHUB_OUTPUT"
+
+      - name: Run Python tests
+        if: steps.release.outputs.exists != 'true'
+        run: python3 -m unittest discover -s tests
+
+      - name: Configure CMake
+        if: steps.release.outputs.exists != 'true'
+        env:
+          HEKATE_PAYLOAD_BIN: ${{ steps.payload.outputs.path }}
+        run: |
+          cmake -B build \
+            -DPICO_SDK_FETCH_FROM_GIT=on \
+            -DPICO_SDK_FETCH_FROM_GIT_TAG="$PICO_SDK_TAG" \
+            -DFUSEE_PAYLOAD_BIN="$HEKATE_PAYLOAD_BIN"
+
+      - name: Build
+        if: steps.release.outputs.exists != 'true'
+        run: cmake --build build --parallel
+
+      - name: Report firmware size
+        if: steps.release.outputs.exists != 'true'
+        run: arm-none-eabi-size build/src/fusee.elf
+
+      - name: Stage release artifacts
+        if: steps.release.outputs.exists != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.hekate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          cp build/src/fusee.uf2 "dist/fusee-rp2040-$RELEASE_TAG.uf2"
+          cp build/src/fusee.elf.map "dist/fusee-rp2040-$RELEASE_TAG.elf.map"
+
+          (
+            cd dist
+            sha256sum "fusee-rp2040-$RELEASE_TAG.uf2" \
+              "fusee-rp2040-$RELEASE_TAG.elf.map" > SHA256SUMS.txt
+          )
+
+      - name: Upload workflow artifacts
+        if: steps.release.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusee-rp2040-${{ steps.hekate.outputs.release_tag }}
+          path: dist/*
+
+      - name: Create GitHub release
+        if: steps.release.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.hekate.outputs.release_tag }}
+          HEKATE_TAG: ${{ steps.hekate.outputs.tag }}
+          HEKATE_NAME: ${{ steps.hekate.outputs.name }}
+          HEKATE_URL: ${{ steps.hekate.outputs.html_url }}
+          HEKATE_ASSET: ${{ steps.hekate.outputs.asset_name }}
+          HEKATE_DIGEST: ${{ steps.hekate.outputs.asset_digest }}
+          IS_UPSTREAM_LATEST: ${{ steps.hekate.outputs.is_latest }}
+        run: |
+          set -euo pipefail
+
+          notes="$(mktemp)"
+          {
+            echo "Automated fusee-rp2040 build embedding [$HEKATE_TAG]($HEKATE_URL)."
+            echo
+            echo "- hekate release: $HEKATE_NAME"
+            echo "- payload asset: $HEKATE_ASSET"
+            if [ -n "$HEKATE_DIGEST" ]; then
+              echo "- payload digest: \`$HEKATE_DIGEST\`"
+            fi
+            echo "- source commit: $GITHUB_SHA"
+          } > "$notes"
+
+          release_args=(
+            "$RELEASE_TAG"
+            dist/*
+            --title "fusee-rp2040 for $HEKATE_TAG"
+            --notes-file "$notes"
+            --target "$GITHUB_SHA"
+          )
+
+          if [ "$IS_UPSTREAM_LATEST" = "true" ]; then
+            release_args+=(--latest)
+          else
+            release_args+=(--latest=false)
+          fi
+
+          gh release create "${release_args[@]}"

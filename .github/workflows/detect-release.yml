@@ -1,0 +1,73 @@
+name: Detect hekate release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: detect-hekate-release
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve latest hekate release
+        id: hekate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          endpoint="repos/CTCaer/hekate/releases/latest"
+          tag="$(gh api "$endpoint" --jq '.tag_name')"
+          version="${tag#v}"
+          asset_name="hekate_ctcaer_${version}.bin"
+          asset_url="$(gh api "$endpoint" --jq ".assets[] | select(.name == \"$asset_name\") | .browser_download_url")"
+
+          if [ -z "$asset_url" ]; then
+            echo "::error::No standard hekate payload asset named $asset_name found in the latest hekate release"
+            gh api "$endpoint" --jq '.assets[].name'
+            exit 1
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "release_tag=hekate-$tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.hekate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $RELEASE_TAG already exists; nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch release workflow
+        if: steps.release.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEKATE_TAG: ${{ steps.hekate.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run release.yml \
+            --ref "$GITHUB_REF_NAME" \
+            -f hekate_tag="$HEKATE_TAG"

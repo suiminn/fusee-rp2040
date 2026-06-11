@@ -1,4 +1,4 @@
-name: Build RP2040 Fusee
+name: CI
 
 on:
   push:
@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -20,13 +23,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib build-essential cmake python3
 
-      - name: Run RCM Image Generator Tests
-        run: python3 -m unittest tests/test_build_rcm_image.py
+      - name: Run Python Tests
+        run: python3 -m unittest discover -s tests
 
       - name: Configure CMake
         run: cmake -B build -DPICO_SDK_FETCH_FROM_GIT=on -DPICO_SDK_FETCH_FROM_GIT_TAG=2.2.0
 
       - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: cmake --build build --parallel
 
       - name: Report firmware size

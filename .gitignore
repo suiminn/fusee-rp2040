@@ -3,3 +3,4 @@ build/
 .DS_Store
 __pycache__/
 *.pyc
+src/bin/hekate_ctcaer_*.bin
