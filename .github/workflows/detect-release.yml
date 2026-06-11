@@ -40,7 +40,7 @@ jobs:
 
           {
             echo "tag=$tag"
-            echo "release_tag=hekate-$tag"
+            echo "release_tag=$tag"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check existing release

@@ -1,4 +1,4 @@
-name: Release hekate payload
+name: Release
 
 on:
   workflow_dispatch:
@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve hekate release
         id: hekate
@@ -68,7 +68,7 @@ jobs:
             echo "html_url=$html_url"
             echo "asset_name=$asset_name"
             echo "asset_digest=$asset_digest"
-            echo "release_tag=hekate-$tag"
+            echo "release_tag=$tag"
             if [ "$tag" = "$latest_tag" ]; then
               echo "is_latest=true"
             else
@@ -145,16 +145,19 @@ jobs:
           mkdir -p dist
           cp build/src/fusee.uf2 "dist/fusee-rp2040-$RELEASE_TAG.uf2"
           cp build/src/fusee.elf.map "dist/fusee-rp2040-$RELEASE_TAG.elf.map"
+          cp THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_NOTICES.md
 
           (
             cd dist
-            sha256sum "fusee-rp2040-$RELEASE_TAG.uf2" \
-              "fusee-rp2040-$RELEASE_TAG.elf.map" > SHA256SUMS.txt
+            sha256sum \
+              "fusee-rp2040-$RELEASE_TAG.uf2" \
+              "fusee-rp2040-$RELEASE_TAG.elf.map" \
+              THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
           )
 
       - name: Upload workflow artifacts
         if: steps.release.outputs.exists != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fusee-rp2040-${{ steps.hekate.outputs.release_tag }}
           path: dist/*
@@ -179,10 +182,14 @@ jobs:
             echo
             echo "- hekate release: $HEKATE_NAME"
             echo "- payload asset: $HEKATE_ASSET"
+            echo "- hekate source: [$HEKATE_TAG](https://github.com/CTCaer/hekate/tree/$HEKATE_TAG)"
+            echo "- hekate license: GNU General Public License version 2.0"
             if [ -n "$HEKATE_DIGEST" ]; then
               echo "- payload digest: \`$HEKATE_DIGEST\`"
             fi
             echo "- source commit: $GITHUB_SHA"
+            echo
+            echo "See the attached THIRD_PARTY_NOTICES.md for third-party license references."
           } > "$notes"
 
           release_args=(
